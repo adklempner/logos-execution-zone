@@ -71,6 +71,27 @@ pub struct WalletConfig {
     pub seq_block_poll_max_amount: u64,
     #[serde(default = "MultiSequencerClientConfig::default")]
     pub multi_sequencer_client_config: MultiSequencerClientConfig,
+    /// Execution gas a wallet-built public transaction declares.
+    ///
+    /// The default suits ordinary transfers and program calls. A wallet whose
+    /// programs are more expensive than that — a zkVM guest's cost is its
+    /// cycle count, and gas is cycles — raises this, rather than being unable
+    /// to send at all: a transaction that declares too little is refused for
+    /// running out of gas, with nothing in the reply to say so.
+    ///
+    /// Declaring more is not free. Admission sums the *declared* gas of a
+    /// block's transactions against the same per-transaction ceiling, so a
+    /// large limit crowds out everything else in its block. Raise it per
+    /// wallet, to what that wallet's heaviest call actually needs.
+    ///
+    /// Absent from a config file, this is [`crate::DEFAULT_GAS_LIMIT`], so
+    /// every existing wallet keeps the behaviour it had.
+    #[serde(default = "default_gas_limit")]
+    pub gas_limit: u64,
+}
+
+fn default_gas_limit() -> u64 {
+    crate::DEFAULT_GAS_LIMIT
 }
 
 impl Default for WalletConfig {
@@ -85,6 +106,7 @@ impl Default for WalletConfig {
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
             multi_sequencer_client_config: MultiSequencerClientConfig::default(),
+            gas_limit: default_gas_limit(),
         }
     }
 }
@@ -135,6 +157,7 @@ impl WalletConfig {
             seq_poll_max_retries,
             seq_block_poll_max_amount,
             multi_sequencer_client_config,
+            gas_limit,
         } = self;
 
         let WalletConfigOverrides {
@@ -144,6 +167,7 @@ impl WalletConfig {
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
             multi_sequencer_client_config: o_multi_sequencer_client_config,
+            gas_limit: o_gas_limit,
         } = overrides;
 
         if let Some(v) = o_sequencers {
@@ -169,6 +193,10 @@ impl WalletConfig {
         if let Some(v) = o_multi_sequencer_client_config {
             warn!("Overriding wallet config 'multi_sequencer_client_config' to {v:?}");
             *multi_sequencer_client_config = v;
+        }
+        if let Some(v) = o_gas_limit {
+            warn!("Overriding wallet config 'gas_limit' to {v}");
+            *gas_limit = v;
         }
     }
 }

@@ -76,6 +76,21 @@ const ASSUMED_DATA_BYTES: u128 = 100_000;
 pub const DEFAULT_MAX_FEE: u128 =
     (DEFAULT_GAS_LIMIT as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE;
 
+/// [`DEFAULT_MAX_FEE`] for a gas limit that is not the default.
+///
+/// The reservation has to cover the gas actually declared, or a wallet that
+/// raises its limit has its transactions refused for a fee cap it never chose.
+/// Unused gas is refunded, so this bounds the reservation, not the price.
+#[must_use]
+pub const fn max_fee_for(gas_limit: u64) -> u128 {
+    #[expect(
+        clippy::as_conversions,
+        reason = "u128::from is not const; the widening is lossless"
+    )]
+    let gas = gas_limit as u128;
+    (gas + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE
+}
+
 pub enum AccDecodeData {
     Skip,
     Decode(lee_core::SharedSecretKey, AccountId),
@@ -952,9 +967,9 @@ impl WalletCore {
             instruction_data,
             Some(lee::FeeDeclaration::new(
                 payer,
-                DEFAULT_GAS_LIMIT,
+                self.config.gas_limit,
                 0,
-                DEFAULT_MAX_FEE,
+                max_fee_for(self.config.gas_limit),
             )),
         );
 
