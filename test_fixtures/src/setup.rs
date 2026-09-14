@@ -3,6 +3,7 @@ use std::{
     fs,
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use anyhow::{Context as _, Result, bail};
@@ -246,6 +247,42 @@ fn locked_logos_bedrock_node_revision() -> Result<String> {
     }
 }
 
+fn bedrock_platform_for_docker_arch(arch: &str) -> Option<&'static str> {
+    match arch.trim() {
+        "amd64" | "x86_64" => Some("linux-x86_64"),
+        "arm64" | "aarch64" => Some("linux-aarch64"),
+        _ => None,
+    }
+}
+
+fn docker_daemon_platform() -> Option<&'static str> {
+    static PLATFORM: OnceLock<Option<&'static str>> = OnceLock::new();
+    *PLATFORM.get_or_init(|| {
+        let output = std::process::Command::new("docker")
+            .args(["info", "--format", "{{.Architecture}}"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        bedrock_platform_for_docker_arch(&String::from_utf8_lossy(&output.stdout))
+    })
+}
+
+fn ensure_node_runs_on_docker_daemon(
+    target_platform: &str,
+    daemon_platform: Option<&str>,
+) -> Result<()> {
+    if let Some(daemon_platform) = daemon_platform
+        && daemon_platform != target_platform
+    {
+        bail!(
+            "Resolved Bedrock node targets {target_platform}, but the Docker daemon runs {daemon_platform}, so the node cannot execute in the Bedrock container. Run `just resolve-bedrock-node`."
+        );
+    }
+    Ok(())
+}
+
 fn validate_resolved_bedrock_node(resolved_directory: &Path) -> Result<()> {
     let metadata_path = resolved_directory.join("metadata.json");
     let metadata: serde_json::Value = serde_json::from_str(
@@ -266,6 +303,7 @@ fn validate_resolved_bedrock_node(resolved_directory: &Path) -> Result<()> {
             "Resolved Bedrock node targets {target_platform}, but Docker-backed tests require a Linux node. Run `just resolve-bedrock-node`."
         );
     }
+    ensure_node_runs_on_docker_daemon(target_platform, docker_daemon_platform())?;
 
     let locked_revision = locked_logos_bedrock_node_revision()?;
     if resolved_revision != locked_revision {
@@ -528,4 +566,51 @@ pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
         .context("Failed to sync wallet from prebuilt chain")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bedrock_platform_for_docker_arch, ensure_node_runs_on_docker_daemon};
+
+    #[test]
+    fn maps_docker_architectures_to_resolved_platforms() {
+        assert_eq!(
+            bedrock_platform_for_docker_arch("x86_64"),
+            Some("linux-x86_64")
+        );
+        assert_eq!(
+            bedrock_platform_for_docker_arch("amd64"),
+            Some("linux-x86_64")
+        );
+        assert_eq!(
+            bedrock_platform_for_docker_arch("aarch64\n"),
+            Some("linux-aarch64")
+        );
+        assert_eq!(
+            bedrock_platform_for_docker_arch("arm64"),
+            Some("linux-aarch64")
+        );
+        assert_eq!(bedrock_platform_for_docker_arch("riscv64"), None);
+    }
+
+    #[test]
+    fn accepts_a_node_the_daemon_can_execute() {
+        assert!(ensure_node_runs_on_docker_daemon("linux-aarch64", Some("linux-aarch64")).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_node_the_daemon_cannot_execute() {
+        let error = ensure_node_runs_on_docker_daemon("linux-x86_64", Some("linux-aarch64"))
+            .expect_err("a node built for another architecture is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("Docker daemon runs linux-aarch64")
+        );
+    }
+
+    #[test]
+    fn skips_the_check_for_an_unknown_daemon() {
+        assert!(ensure_node_runs_on_docker_daemon("linux-x86_64", None).is_ok());
+    }
 }
