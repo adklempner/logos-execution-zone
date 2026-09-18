@@ -69,12 +69,15 @@ const ASSUMED_BASE_FEE: u128 = 64;
 const ASSUMED_DATA_BYTES: u128 = 100_000;
 
 /// Default cap on the fee reservation for wallet-built public transactions.
+pub const DEFAULT_MAX_FEE: u128 = max_fee_for_gas_limit(DEFAULT_GAS_LIMIT);
+
 #[expect(
     clippy::as_conversions,
     reason = "u128::from is not const; the widening is lossless"
 )]
-pub const DEFAULT_MAX_FEE: u128 =
-    (DEFAULT_GAS_LIMIT as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE;
+const fn max_fee_for_gas_limit(gas_limit: u64) -> u128 {
+    (gas_limit as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE
+}
 
 pub enum AccDecodeData {
     Skip,
@@ -954,7 +957,7 @@ impl WalletCore {
                 payer,
                 self.config.gas_limit,
                 0,
-                DEFAULT_MAX_FEE,
+                max_fee_for_gas_limit(self.config.gas_limit),
             )),
         );
 
@@ -1200,6 +1203,16 @@ mod tests {
     use std::{ffi::CString, str::FromStr as _};
 
     use bip39::Mnemonic;
+
+    #[test]
+    fn configured_gas_limit_scales_fee_cap() {
+        assert_eq!(super::DEFAULT_MAX_FEE, 134_400_000);
+        let cap = super::max_fee_for_gas_limit(10_000_000);
+        assert_eq!(cap, 646_400_000);
+        // A registration at base fee 14 exceeds the old fixed cap.
+        assert!(cap >= 140_004_216);
+        assert!(super::DEFAULT_MAX_FEE < 140_004_216);
+    }
 
     #[test]
     fn mnemonic_roundtrip() {
